@@ -1,49 +1,82 @@
 package main
 
 import (
+	"encoding/json"
 	"flag"
-	"fmt"
+	"io/ioutil"
 	"log"
 	"net/http"
-	"os/exec"
+	rs "remote_shutdown/remote_shutdown"
+	"remote_shutdown/utils"
 )
 
-func cmdShutdown() error {
-	return exec.Command("shutdown").Run()
+type RSRequest struct {
+	Hosts []rs.RShutdown `json:"hosts"`
+}
+
+type RSResponse struct {
+	Data string `json:"data"`
+	Error string	`json:"error"`
 }
 
 func handleShutdown(securityCode string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != "GET" {
-			log.Printf("incorrect method received: %v", r.Method)
-			w.WriteHeader(404)
+		u := utils.New()
+		if r.Method != http.MethodPost {
+			u.Log.Printf("API accessed with method %s. Sending HTTP 405", r.Method)
+			http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
+			//w.WriteHeader(404)
 			return
 		}
+
+		q := r.URL
+		u.Log.Infof("q = %#v", q)
 
 		sKey := r.URL.Query().Get("s")
+		u.Log.Infof("skey = %s", sKey)
 
-		if sKey == "" {
-			log.Println("no security key provided")
+		output := &RSResponse{
+			Data:  "",
+			Error: "",
+		}
+
+		bodyBytes, bodyBytesErr := ioutil.ReadAll(r.Body)
+		if bodyBytesErr != nil {
+			u.Log.Errorf("Unable to read request Body. %s", bodyBytesErr.Error())
+			output.Error = bodyBytesErr.Error()
+			u.SendResponseJSON(w, output)
 			return
 		}
 
-		if sKey != securityCode {
-			log.Println("security codes don't match")
+		var req RSRequest
+
+		inputErr := json.Unmarshal(bodyBytes, &req)
+		if inputErr != nil {
+			u.Log.Errorf("Unable to parse request data. %s", inputErr.Error())
+			output.Error = inputErr.Error()
+			u.SendResponseJSON(w, output)
 			return
 		}
 
-		err := cmdShutdown()
-		if err != nil {
-			w.WriteHeader(500)
-			msg := "Failed to shutdown system"
-			log.Printf("%s - %v", msg, err)
-			fmt.Fprintf(w, msg)
-			return
-		}
+		for key, hostData := range req.Hosts {
+			u.Log.Infof("key = %d", key)
+			u.Log.Infof("HostData = %#v", hostData)
+			err := hostData.Execute(sKey)
 
-		msg := "System is going to shutdown soon"
-		log.Println(msg)
-		fmt.Fprintf(w, msg)
+			//err := cmdShutdown()
+			if err != nil {
+				w.WriteHeader(http.StatusInternalServerError)
+				//http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+				u.Log.Errorf("Failed to shutdown system. %s", err.Error())
+				output.Error = "Failed to shutdown system. " + err.Error()
+				u.SendResponseJSON(w, output)
+				return
+			}
+
+			output.Data = "System is going to shutdown soon"
+			u.Log.Infof(output.Data)
+			u.SendResponseJSON(w, output)
+		}
 	}
 }
 
@@ -51,12 +84,12 @@ func handleShutdown(securityCode string) http.HandlerFunc {
 // For additional security, you should genereate some secret code (string) and start your application with it.
 // You should provide this secret code in the request to `GET /shutdown` in **s** parameter.
 func main() {
-	var (
-		securityCode = flag.String("sec-code", "", "Security code")
-		port         = flag.String("port", "9898", "Port to listen")
-	)
-	flag.Parse()
+		securityCode := flag.String("sec-code", "", "Security code")
+		port         := flag.String("port", "9898", "Port to listen")
+		flag.Parse()
 
-	http.HandleFunc("/shutdown", handleShutdown(*securityCode))
-	log.Fatal(http.ListenAndServe(":"+*port, nil))
+		u := utils.New()
+		u.Log.Infof("Security code: %s", *securityCode)
+		http.HandleFunc("/shutdown", handleShutdown(*securityCode))
+		log.Fatal(http.ListenAndServe(":"+*port, nil))
 }

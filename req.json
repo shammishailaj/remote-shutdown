@@ -1,0 +1,9 @@
+{"hosts": [
+"protocol":"http",
+"hostname":"localhost",
+"port":80,
+"wait":10,
+"token":"shammi",
+"path":"/shutdown"
+]
+}
